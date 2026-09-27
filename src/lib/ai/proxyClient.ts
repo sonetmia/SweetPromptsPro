@@ -28,7 +28,7 @@ export interface TestConnectionPayload {
 
 /**
  * Cleanly handles API text generation with server proxy first,
- * falling back seamlessly to direct client-side browser API execution.
+ * falling back seamlessly to direct client-side browser API execution (Netlify / Vercel / GitHub Pages).
  */
 export async function executeApiGenerate(payload: GeneratePayload): Promise<string> {
   const {
@@ -70,14 +70,13 @@ export async function executeApiGenerate(payload: GeneratePayload): Promise<stri
       }
     }
   } catch (err: any) {
-    // If the server explicitly returned an error message, rethrow it
     if (err.message && !err.message.includes('Failed to fetch') && !err.message.includes('Unexpected token')) {
       throw err;
     }
     console.warn('Backend proxy unavailable, switching to direct browser AI call:', err?.message || err);
   }
 
-  // 2. Direct client-side execution fallback (for Vercel Static, GitHub Pages, or server offline)
+  // 2. Direct client-side execution fallback (for Netlify, Vercel, GitHub Pages)
   return executeDirectClientGenerate({
     provider,
     apiKey,
@@ -98,7 +97,7 @@ async function executeDirectClientGenerate(payload: GeneratePayload): Promise<st
 
   const cleanSystem = systemInstruction || 'You are SweetPrompts Pro, an expert AI microstock creation assistant for Adobe Stock contributors.';
 
-  // Gemini Client
+  // Google Gemini Client
   if (provider === 'gemini') {
     const activeKey = apiKey || (typeof window !== 'undefined' ? (window as any).VITE_GEMINI_API_KEY : '') || '';
     if (!activeKey) {
@@ -155,7 +154,7 @@ async function executeDirectClientGenerate(payload: GeneratePayload): Promise<st
           const errText = await fetchRes.text();
           if (fetchRes.status === 404 || errText.includes('does not exist') || errText.includes('model_not_found') || errText.includes('access')) {
             lastGroqErr = new Error(`Groq API Error (${candidate}): ${errText}`);
-            continue; // Try next candidate model
+            continue;
           }
           throw new Error(`Groq API Error (${fetchRes.status}): ${errText}`);
         }
@@ -171,9 +170,7 @@ async function executeDirectClientGenerate(payload: GeneratePayload): Promise<st
       }
     }
 
-    if (lastGroqErr) {
-      throw lastGroqErr;
-    }
+    if (lastGroqErr) throw lastGroqErr;
   }
 
   // OpenRouter Client
@@ -350,7 +347,70 @@ export async function executeApiVision(payload: VisionPayload): Promise<string> 
     if (response.text) return response.text;
   }
 
-  throw new Error('Vision analysis failed. Please verify your provider API key.');
+  // Direct Browser Vision Fallback for Groq
+  if (provider === 'groq') {
+    if (!apiKey) throw new Error('Groq API Key missing for vision analysis. Please enter your key in Settings.');
+    const visionModel = model || 'llama-3.2-11b-vision-instruct';
+    const fetchRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: visionModel,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: prompt },
+              { type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageBase64}` } },
+            ],
+          },
+        ],
+        max_tokens: 1000,
+      }),
+    });
+
+    if (fetchRes.ok) {
+      const data = await fetchRes.json();
+      return data.choices?.[0]?.message?.content || '';
+    }
+  }
+
+  // Direct Browser Vision Fallback for OpenRouter
+  if (provider === 'openrouter') {
+    if (!apiKey) throw new Error('OpenRouter API Key missing for vision analysis. Please enter your key in Settings.');
+    const visionModel = model || 'google/gemini-2.0-flash-001';
+    const fetchRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+        'HTTP-Referer': 'https://sweetpromptspro.com',
+        'X-Title': 'SweetPrompts Pro',
+      },
+      body: JSON.stringify({
+        model: visionModel,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: prompt },
+              { type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageBase64}` } },
+            ],
+          },
+        ],
+      }),
+    });
+
+    if (fetchRes.ok) {
+      const data = await fetchRes.json();
+      return data.choices?.[0]?.message?.content || '';
+    }
+  }
+
+  throw new Error('Vision analysis failed. Please verify your provider API key in Settings.');
 }
 
 /**
@@ -358,6 +418,8 @@ export async function executeApiVision(payload: VisionPayload): Promise<string> 
  */
 export async function executeApiTestConnection(payload: TestConnectionPayload): Promise<any> {
   const { provider = 'gemini', apiKey = '', model } = payload;
+
+  const startTime = Date.now();
 
   try {
     const res = await fetch('/api/test-connection', {
@@ -378,17 +440,40 @@ export async function executeApiTestConnection(payload: TestConnectionPayload): 
     }
   }
 
-  // Direct browser test fallback
-  if (!apiKey) {
+  // Direct Browser Test Execution for Static Deployment (Netlify)
+  if (!apiKey || !apiKey.trim()) {
     return { success: false, error: 'No API key provided. Please add your key in Settings.' };
   }
 
-  return {
-    success: true,
-    provider,
-    message: `Connected to ${provider.toUpperCase()} directly in browser`,
-    hasText: true,
-    hasVision: provider === 'gemini' || provider === 'groq' || provider === 'openrouter',
-    latencyMs: 120,
-  };
+  try {
+    // Quick 1-token test ping directly to provider
+    const testPrompt = 'Hi';
+    await executeDirectClientGenerate({
+      provider,
+      apiKey,
+      model,
+      prompt: testPrompt,
+      maxTokens: 5,
+    });
+
+    const latencyMs = Date.now() - startTime;
+    return {
+      success: true,
+      provider,
+      message: `Connected to ${provider.toUpperCase()} directly in browser (${latencyMs}ms)`,
+      hasText: true,
+      hasVision: provider === 'gemini' || provider === 'groq' || provider === 'openrouter' || provider === 'mistral',
+      latencyMs,
+    };
+  } catch (tErr: any) {
+    return {
+      success: false,
+      provider,
+      error: tErr.message || 'Connection test failed',
+      message: tErr.message || `Failed to connect to ${provider.toUpperCase()}`,
+      hasText: false,
+      hasVision: false,
+      latencyMs: Date.now() - startTime,
+    };
+  }
 }
