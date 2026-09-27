@@ -329,27 +329,48 @@ async function startServer() {
           return res.status(400).json({ error: 'Hugging Face API key (hf_...) not configured. Please add your key in Settings.' });
         }
 
-        const selectedModel = model || 'meta-llama/Llama-3.3-70B-Instruct';
-        const fetchRes = await fetch('https://api-inference.huggingface.co/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${hfKey}`,
-          },
-          body: JSON.stringify({
-            model: selectedModel,
-            messages: [
-              { role: 'system', content: cleanSystem },
-              { role: 'user', content: prompt }
-            ],
-            response_format: jsonMode ? { type: 'json_object' } : undefined,
-            temperature,
-            max_tokens: maxTokens,
-          }),
-        });
+        const selectedModel = model || 'meta-llama/Llama-3.2-3B-Instruct';
+        const candidateEndpoints = [
+          'https://router.huggingface.co/hf-inference/v1/chat/completions',
+          'https://router.huggingface.co/v1/chat/completions',
+          'https://api-inference.huggingface.co/v1/chat/completions',
+        ];
 
-        const text = await handleOpenAIChatResponse(fetchRes, 'Hugging Face');
-        return res.json({ result: text });
+        let lastHfErr = '';
+        for (const ep of candidateEndpoints) {
+          try {
+            const fetchRes = await fetch(ep, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${hfKey}`,
+              },
+              body: JSON.stringify({
+                model: selectedModel,
+                messages: [
+                  { role: 'system', content: cleanSystem },
+                  { role: 'user', content: prompt }
+                ],
+                response_format: jsonMode ? { type: 'json_object' } : undefined,
+                temperature,
+                max_tokens: maxTokens,
+              }),
+            });
+
+            if (!fetchRes.ok) {
+              lastHfErr = await fetchRes.text();
+              continue;
+            }
+
+            const text = await handleOpenAIChatResponse(fetchRes, 'Hugging Face');
+            return res.json({ result: text });
+          } catch (hErr: any) {
+            lastHfErr = hErr.message || String(hErr);
+            continue;
+          }
+        }
+
+        return res.status(400).json({ error: `Hugging Face API Error: ${lastHfErr || 'Endpoint unreachable'}` });
       }
 
       // Provider: Cerebras
@@ -735,27 +756,45 @@ async function startServer() {
       if (provider === 'huggingface') {
         const hfKey = apiKey || process.env.HUGGINGFACE_API_KEY || process.env.HF_TOKEN;
         if (!hfKey) return res.status(400).json({ success: false, error: 'No Hugging Face token provided' });
-        const fetchRes = await fetch('https://api-inference.huggingface.co/v1/chat/completions', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${hfKey}` },
-          body: JSON.stringify({ 
-            model: model || 'meta-llama/Llama-3.3-70B-Instruct', 
-            messages: [{ role: 'user', content: 'Ping test. Reply: OK' }],
-            max_tokens: 5
-          })
-        });
-        const latencyMs = Date.now() - startTime;
-        if (!fetchRes.ok) {
-          const err = await fetchRes.text();
-          return res.status(fetchRes.status).json({ success: false, error: parseCleanError(err, 'Hugging Face') });
+        
+        const candidateEndpoints = [
+          'https://router.huggingface.co/hf-inference/v1/chat/completions',
+          'https://router.huggingface.co/v1/chat/completions',
+          'https://api-inference.huggingface.co/v1/chat/completions',
+        ];
+
+        let lastHfErr = '';
+        for (const ep of candidateEndpoints) {
+          try {
+            const fetchRes = await fetch(ep, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${hfKey}` },
+              body: JSON.stringify({ 
+                model: model || 'meta-llama/Llama-3.2-3B-Instruct', 
+                messages: [{ role: 'user', content: 'Ping test. Reply: OK' }],
+                max_tokens: 5
+              })
+            });
+            const latencyMs = Date.now() - startTime;
+            if (fetchRes.ok) {
+              return res.json({ 
+                success: true, 
+                provider: 'huggingface',
+                message: 'Connected to Hugging Face Router API successfully', 
+                hasText: true,
+                hasVision: false,
+                latencyMs
+              });
+            }
+            lastHfErr = await fetchRes.text();
+          } catch (hErr: any) {
+            lastHfErr = hErr.message || String(hErr);
+          }
         }
-        return res.json({ 
-          success: true, 
-          provider: 'huggingface',
-          message: 'Connected to Hugging Face Inference successfully', 
-          hasText: true,
-          hasVision: false,
-          latencyMs
+
+        return res.status(400).json({ 
+          success: false, 
+          error: parseCleanError(lastHfErr || 'Hugging Face endpoint unreachable', 'Hugging Face') 
         });
       }
 

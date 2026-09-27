@@ -43,7 +43,7 @@ export default async function handler(req: any, res: any) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${groqKey}` },
         body: JSON.stringify({
-          model: model || 'llama-3.3-70b-versatile',
+          model: model || 'llama-3.1-8b-instant',
           messages: [{ role: 'user', content: 'Ping test. Reply: OK' }],
           max_tokens: 5,
         }),
@@ -63,6 +63,48 @@ export default async function handler(req: any, res: any) {
         hasVision: true,
         latencyMs,
       });
+    }
+
+    if (provider === 'huggingface') {
+      const hfKey = apiKey || process.env.HUGGINGFACE_API_KEY || process.env.HF_TOKEN;
+      if (!hfKey) return res.status(400).json({ success: false, error: 'No Hugging Face token provided' });
+
+      const candidateEndpoints = [
+        'https://router.huggingface.co/hf-inference/v1/chat/completions',
+        'https://router.huggingface.co/v1/chat/completions',
+        'https://api-inference.huggingface.co/v1/chat/completions',
+      ];
+
+      let lastHfErr = '';
+      for (const ep of candidateEndpoints) {
+        try {
+          const fetchRes = await fetch(ep, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${hfKey}` },
+            body: JSON.stringify({ 
+              model: model || 'meta-llama/Llama-3.2-3B-Instruct', 
+              messages: [{ role: 'user', content: 'Ping test. Reply: OK' }],
+              max_tokens: 5
+            })
+          });
+          const latencyMs = Date.now() - startTime;
+          if (fetchRes.ok) {
+            return res.status(200).json({ 
+              success: true, 
+              provider: 'huggingface',
+              message: 'Connected to Hugging Face Router API successfully', 
+              hasText: true,
+              hasVision: false,
+              latencyMs
+            });
+          }
+          lastHfErr = await fetchRes.text();
+        } catch (hErr: any) {
+          lastHfErr = hErr.message || String(hErr);
+        }
+      }
+
+      return res.status(400).json({ success: false, error: `Hugging Face error: ${lastHfErr}` });
     }
 
     return res.status(200).json({

@@ -27,8 +27,52 @@ export interface TestConnectionPayload {
 }
 
 /**
+ * Universal helper to extract clean, human-readable error messages
+ * instead of dumping raw JSON strings or ENOTFOUND stack traces.
+ */
+export function extractCleanErrorMessage(providerName: string, status: number, rawErrText: string): string {
+  let cleanMsg = '';
+
+  try {
+    const parsed = JSON.parse(rawErrText);
+    cleanMsg = parsed?.message || parsed?.error?.message || parsed?.error || parsed?.detail || rawErrText;
+  } catch {
+    cleanMsg = rawErrText;
+  }
+
+  if (typeof cleanMsg === 'object') {
+    try {
+      cleanMsg = (cleanMsg as any).message || JSON.stringify(cleanMsg);
+    } catch {
+      cleanMsg = String(cleanMsg);
+    }
+  }
+
+  const lower = String(cleanMsg).toLowerCase();
+
+  if (lower.includes('enotfound') || lower.includes('fetch failed') || lower.includes('econnrefused')) {
+    return `${providerName}: Network endpoint or DNS unreachable. Please check your internet connection or try another provider.`;
+  }
+
+  if (status === 429 || lower.includes('rate limit') || lower.includes('quota') || lower.includes('too many requests')) {
+    return `${providerName}: Rate limit or API quota reached. Please wait a moment, or switch to Gemini / Groq / OpenRouter in Settings.`;
+  }
+
+  if (status === 401 || lower.includes('unauthorized') || lower.includes('invalid api key') || lower.includes('invalid_api_key')) {
+    return `${providerName}: Invalid API key. Please verify your key in Settings.`;
+  }
+
+  if (status === 403 || lower.includes('subscription tier') || lower.includes('access')) {
+    return `${providerName}: Model not supported on your free key tier. Retrying backup model...`;
+  }
+
+  const shortMsg = String(cleanMsg).replace(/[{}"\\]/g, ' ').replace(/\s+/g, ' ').trim();
+  return `${providerName} (${status || 'Error'}): ${shortMsg.slice(0, 120)}`;
+}
+
+/**
  * Cleanly handles API text generation with server proxy first,
- * falling back seamlessly to direct client-side browser API execution (Netlify / Vercel / GitHub Pages).
+ * falling back seamlessly to direct client-side browser API execution.
  */
 export async function executeApiGenerate(payload: GeneratePayload): Promise<string> {
   const {
@@ -119,7 +163,7 @@ async function executeDirectClientGenerate(payload: GeneratePayload): Promise<st
       if (response.text) return response.text;
       throw new Error('Empty response from Gemini');
     } catch (e: any) {
-      throw new Error(`Google Gemini Error: ${e.message || e}`);
+      throw new Error(extractCleanErrorMessage('Google Gemini', 400, e.message || String(e)));
     }
   }
 
@@ -129,7 +173,7 @@ async function executeDirectClientGenerate(payload: GeneratePayload): Promise<st
     const initialModel = model || 'llama-3.1-8b-instant';
     const candidateModels = Array.from(new Set([initialModel, 'llama-3.1-8b-instant', 'llama-3.3-70b-versatile', 'llama3-70b-8192', 'mixtral-8x7b-32768', 'gemma2-9b-it']));
 
-    let lastGroqErr: any = null;
+    let lastGroqErr = '';
     for (const candidate of candidateModels) {
       try {
         const fetchRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -151,156 +195,221 @@ async function executeDirectClientGenerate(payload: GeneratePayload): Promise<st
         });
 
         if (!fetchRes.ok) {
-          const errText = await fetchRes.text();
-          if (fetchRes.status === 404 || errText.includes('does not exist') || errText.includes('model_not_found') || errText.includes('access')) {
-            lastGroqErr = new Error(`Groq API Error (${candidate}): ${errText}`);
+          lastGroqErr = await fetchRes.text();
+          if (fetchRes.status === 404 || fetchRes.status === 429 || fetchRes.status === 403 || lastGroqErr.includes('does not exist') || lastGroqErr.includes('rate limit')) {
             continue;
           }
-          throw new Error(`Groq API Error (${fetchRes.status}): ${errText}`);
+          throw new Error(extractCleanErrorMessage('Groq', fetchRes.status, lastGroqErr));
         }
 
         const data = await fetchRes.json();
         return data.choices?.[0]?.message?.content || '';
       } catch (gErr: any) {
-        lastGroqErr = gErr;
-        if (String(gErr.message).includes('does not exist') || String(gErr.message).includes('access') || String(gErr.message).includes('model_not_found')) {
+        lastGroqErr = gErr.message || String(gErr);
+        if (lastGroqErr.includes('does not exist') || lastGroqErr.includes('access') || lastGroqErr.includes('rate limit')) {
           continue;
         }
-        throw gErr;
+        throw new Error(extractCleanErrorMessage('Groq', 400, lastGroqErr));
       }
     }
 
-    if (lastGroqErr) throw lastGroqErr;
+    throw new Error(extractCleanErrorMessage('Groq', 429, lastGroqErr || 'Model not accessible or rate limited'));
   }
 
   // OpenRouter Client
   if (provider === 'openrouter') {
     if (!apiKey) throw new Error('OpenRouter API Key is missing. Please enter your OpenRouter key in Settings.');
-    const selectedModel = model || 'meta-llama/llama-3.3-70b-instruct';
-    const fetchRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-        'HTTP-Referer': 'https://sweetpromptspro.com',
-        'X-Title': 'SweetPrompts Pro',
-      },
-      body: JSON.stringify({
-        model: selectedModel,
-        messages: [
-          { role: 'system', content: cleanSystem },
-          { role: 'user', content: prompt }
-        ],
-        response_format: jsonMode ? { type: 'json_object' } : undefined,
-        temperature,
-        max_tokens: maxTokens,
-      }),
-    });
+    const initialModel = model || 'google/gemini-2.0-flash-lite-001';
+    const candidateModels = Array.from(new Set([
+      initialModel,
+      'google/gemini-2.0-flash-lite-001',
+      'meta-llama/llama-3.3-70b-instruct',
+      'meta-llama/llama-3.1-8b-instruct:free',
+      'mistralai/mistral-7b-instruct:free',
+      'deepseek/deepseek-r1:free'
+    ]));
 
-    if (!fetchRes.ok) {
-      const errText = await fetchRes.text();
-      throw new Error(`OpenRouter API Error (${fetchRes.status}): ${errText}`);
+    let lastOpenRouterErr = '';
+    for (const candidate of candidateModels) {
+      try {
+        const fetchRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`,
+            'HTTP-Referer': 'https://sweetpromptspro.com',
+            'X-Title': 'SweetPrompts Pro',
+          },
+          body: JSON.stringify({
+            model: candidate,
+            messages: [
+              { role: 'system', content: cleanSystem },
+              { role: 'user', content: prompt }
+            ],
+            response_format: jsonMode ? { type: 'json_object' } : undefined,
+            temperature,
+            max_tokens: maxTokens,
+          }),
+        });
+
+        if (!fetchRes.ok) {
+          lastOpenRouterErr = await fetchRes.text();
+          if (fetchRes.status === 404 || fetchRes.status === 429 || fetchRes.status === 403) {
+            continue;
+          }
+          throw new Error(extractCleanErrorMessage('OpenRouter', fetchRes.status, lastOpenRouterErr));
+        }
+        const data = await fetchRes.json();
+        return data.choices?.[0]?.message?.content || '';
+      } catch (oErr: any) {
+        lastOpenRouterErr = oErr.message || String(oErr);
+        continue;
+      }
     }
-    const data = await fetchRes.json();
-    return data.choices?.[0]?.message?.content || '';
+
+    throw new Error(extractCleanErrorMessage('OpenRouter', 429, lastOpenRouterErr || 'Rate limited or model unavailable'));
   }
 
   // Mistral Client
   if (provider === 'mistral') {
     if (!apiKey) throw new Error('Mistral API Key is missing. Please enter your Mistral key in Settings.');
     const initialModel = (model && model !== 'mistral-large-latest') ? model : 'mistral-small-latest';
-    const candidateModels = Array.from(new Set([initialModel, 'mistral-small-latest', 'open-mistral-7b']));
+    const candidateModels = Array.from(new Set([initialModel, 'mistral-small-latest', 'open-mistral-7b', 'open-mistral-nemo']));
 
-    let lastErrText = '';
+    let lastMistralErrText = '';
     for (const candidate of candidateModels) {
-      const fetchRes = await fetch('https://api.mistral.ai/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          model: candidate,
-          messages: [
-            { role: 'system', content: cleanSystem },
-            { role: 'user', content: prompt }
-          ],
-          response_format: jsonMode ? { type: 'json_object' } : undefined,
-          temperature,
-          max_tokens: maxTokens,
-        }),
-      });
+      try {
+        const fetchRes = await fetch('https://api.mistral.ai/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            model: candidate,
+            messages: [
+              { role: 'system', content: cleanSystem },
+              { role: 'user', content: prompt }
+            ],
+            response_format: jsonMode ? { type: 'json_object' } : undefined,
+            temperature,
+            max_tokens: maxTokens,
+          }),
+        });
 
-      if (!fetchRes.ok) {
-        lastErrText = await fetchRes.text();
-        if (fetchRes.status === 403 || lastErrText.includes('subscription tier')) {
-          continue;
+        if (!fetchRes.ok) {
+          lastMistralErrText = await fetchRes.text();
+          if (fetchRes.status === 403 || fetchRes.status === 429 || lastMistralErrText.includes('rate limit') || lastMistralErrText.includes('subscription tier')) {
+            continue;
+          }
+          throw new Error(extractCleanErrorMessage('Mistral', fetchRes.status, lastMistralErrText));
         }
-        throw new Error(`Mistral API Error (${fetchRes.status}): ${lastErrText}`);
+        const data = await fetchRes.json();
+        return data.choices?.[0]?.message?.content || '';
+      } catch (mErr: any) {
+        lastMistralErrText = mErr.message || String(mErr);
+        continue;
       }
-      const data = await fetchRes.json();
-      return data.choices?.[0]?.message?.content || '';
     }
 
-    throw new Error(`Mistral API Error (403): ${lastErrText || 'Model not available in your subscription tier'}`);
+    throw new Error(extractCleanErrorMessage('Mistral', 429, lastMistralErrText || 'Rate limit or free quota reached'));
   }
 
   // Cerebras Client
   if (provider === 'cerebras') {
     if (!apiKey) throw new Error('Cerebras API Key is missing. Please enter your Cerebras key in Settings.');
-    const selectedModel = model || 'llama3.1-70b';
-    const fetchRes = await fetch('https://api.cerebras.ai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: selectedModel,
-        messages: [
-          { role: 'system', content: cleanSystem },
-          { role: 'user', content: prompt }
-        ],
-        temperature,
-        max_tokens: maxTokens,
-      }),
-    });
+    const initialModel = model || 'llama3.1-8b';
+    const candidateModels = Array.from(new Set([initialModel, 'llama3.1-8b', 'llama-3.3-70b']));
 
-    if (!fetchRes.ok) {
-      const errText = await fetchRes.text();
-      throw new Error(`Cerebras API Error (${fetchRes.status}): ${errText}`);
+    let lastCerebrasErr = '';
+    for (const candidate of candidateModels) {
+      try {
+        const fetchRes = await fetch('https://api.cerebras.ai/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            model: candidate,
+            messages: [
+              { role: 'system', content: cleanSystem },
+              { role: 'user', content: prompt }
+            ],
+            temperature,
+            max_tokens: maxTokens,
+          }),
+        });
+
+        if (!fetchRes.ok) {
+          lastCerebrasErr = await fetchRes.text();
+          continue;
+        }
+        const data = await fetchRes.json();
+        return data.choices?.[0]?.message?.content || '';
+      } catch (cErr: any) {
+        lastCerebrasErr = cErr.message || String(cErr);
+        continue;
+      }
     }
-    const data = await fetchRes.json();
-    return data.choices?.[0]?.message?.content || '';
+
+    throw new Error(extractCleanErrorMessage('Cerebras', 400, lastCerebrasErr));
   }
 
   // Hugging Face Client
   if (provider === 'huggingface') {
     if (!apiKey) throw new Error('Hugging Face API Token is missing. Please enter your token in Settings.');
-    const selectedModel = model || 'meta-llama/Llama-3.2-3B-Instruct';
-    const fetchRes = await fetch('https://api-inference.huggingface.co/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: selectedModel,
-        messages: [
-          { role: 'system', content: cleanSystem },
-          { role: 'user', content: prompt }
-        ],
-        temperature,
-        max_tokens: maxTokens,
-      }),
-    });
+    const initialModel = model || 'meta-llama/Llama-3.2-3B-Instruct';
+    const candidateModels = Array.from(new Set([
+      initialModel,
+      'meta-llama/Llama-3.2-3B-Instruct',
+      'meta-llama/Llama-3.2-1B-Instruct',
+      'mistralai/Mistral-7B-Instruct-v0.3'
+    ]));
 
-    if (!fetchRes.ok) {
-      const errText = await fetchRes.text();
-      throw new Error(`Hugging Face API Error (${fetchRes.status}): ${errText}`);
+    const endpointsToTry = [
+      'https://router.huggingface.co/hf-inference/v1/chat/completions',
+      'https://router.huggingface.co/v1/chat/completions',
+      'https://api-inference.huggingface.co/v1/chat/completions',
+    ];
+
+    let lastHfErr = '';
+    for (const endpoint of endpointsToTry) {
+      for (const candidate of candidateModels) {
+        try {
+          const fetchRes = await fetch(endpoint, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${apiKey}`,
+            },
+            body: JSON.stringify({
+              model: candidate,
+              messages: [
+                { role: 'system', content: cleanSystem },
+                { role: 'user', content: prompt }
+              ],
+              temperature,
+              max_tokens: maxTokens,
+            }),
+          });
+
+          if (!fetchRes.ok) {
+            lastHfErr = await fetchRes.text();
+            continue;
+          }
+          const data = await fetchRes.json();
+          if (data.choices?.[0]?.message?.content) {
+            return data.choices[0].message.content;
+          }
+        } catch (hErr: any) {
+          lastHfErr = hErr.message || String(hErr);
+          continue;
+        }
+      }
     }
-    const data = await fetchRes.json();
-    return data.choices?.[0]?.message?.content || '';
+
+    throw new Error(extractCleanErrorMessage('Hugging Face', 400, lastHfErr || 'Hugging Face API endpoint unreachable'));
   }
 
   throw new Error(`Unsupported provider: ${provider}`);
@@ -446,7 +555,6 @@ export async function executeApiTestConnection(payload: TestConnectionPayload): 
   }
 
   try {
-    // Quick 1-token test ping directly to provider
     const testPrompt = 'Hi';
     await executeDirectClientGenerate({
       provider,

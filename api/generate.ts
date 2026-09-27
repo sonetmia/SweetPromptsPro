@@ -7,6 +7,41 @@ const GEMINI_TEXT_FALLBACKS = [
   'gemini-1.5-pro'
 ];
 
+function extractCleanErrorMessage(providerName: string, status: number, rawErrText: string): string {
+  let cleanMsg = '';
+  try {
+    const parsed = JSON.parse(rawErrText);
+    cleanMsg = parsed?.message || parsed?.error?.message || parsed?.error || parsed?.detail || rawErrText;
+  } catch {
+    cleanMsg = rawErrText;
+  }
+
+  if (typeof cleanMsg === 'object') {
+    try {
+      cleanMsg = (cleanMsg as any).message || JSON.stringify(cleanMsg);
+    } catch {
+      cleanMsg = String(cleanMsg);
+    }
+  }
+
+  const lower = String(cleanMsg).toLowerCase();
+
+  if (status === 429 || lower.includes('rate limit') || lower.includes('quota') || lower.includes('too many requests')) {
+    return `${providerName}: Rate limit or API quota reached. Please wait a moment, or switch to Gemini / Groq / OpenRouter in Settings.`;
+  }
+
+  if (status === 401 || lower.includes('unauthorized') || lower.includes('invalid api key') || lower.includes('invalid_api_key')) {
+    return `${providerName}: Invalid API key. Please verify your key in Settings.`;
+  }
+
+  if (status === 403 || lower.includes('subscription tier') || lower.includes('access')) {
+    return `${providerName}: Model not supported on your free key tier. Retrying backup model...`;
+  }
+
+  const shortMsg = String(cleanMsg).replace(/[{}"\\]/g, ' ').replace(/\s+/g, ' ').trim();
+  return `${providerName} (${status || 'Error'}): ${shortMsg.slice(0, 120)}`;
+}
+
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method Not Allowed' });
@@ -82,7 +117,7 @@ export default async function handler(req: any, res: any) {
       }
 
       if (lastError) {
-        return res.status(400).json({ error: lastError.message || 'Gemini generation failed' });
+        return res.status(400).json({ error: extractCleanErrorMessage('Google Gemini', 400, lastError.message || String(lastError)) });
       }
       return res.status(500).json({ error: 'Failed to generate content with Gemini.' });
     }
@@ -118,27 +153,22 @@ export default async function handler(req: any, res: any) {
 
           if (!fetchRes.ok) {
             const errText = await fetchRes.text();
-            if (fetchRes.status === 404 || errText.includes('does not exist') || errText.includes('model_not_found') || errText.includes('access')) {
-              lastGroqErr = new Error(`Groq error (${candidate}): ${errText}`);
-              continue; // Try next model
+            if (fetchRes.status === 404 || fetchRes.status === 429 || fetchRes.status === 403 || errText.includes('does not exist') || errText.includes('model_not_found') || errText.includes('access')) {
+              lastGroqErr = extractCleanErrorMessage('Groq', fetchRes.status, errText);
+              continue;
             }
-            return res.status(fetchRes.status).json({ error: `Groq error: ${errText}` });
+            return res.status(fetchRes.status).json({ error: extractCleanErrorMessage('Groq', fetchRes.status, errText) });
           }
 
           const data = await fetchRes.json();
           return res.status(200).json({ result: data.choices?.[0]?.message?.content || '', modelUsed: candidate });
         } catch (gErr: any) {
-          lastGroqErr = gErr;
-          if (String(gErr.message).includes('does not exist') || String(gErr.message).includes('access') || String(gErr.message).includes('model_not_found')) {
-            continue;
-          }
-          throw gErr;
+          lastGroqErr = gErr.message || String(gErr);
+          continue;
         }
       }
 
-      if (lastGroqErr) {
-        return res.status(400).json({ error: lastGroqErr.message || 'Groq generation failed' });
-      }
+      return res.status(400).json({ error: extractCleanErrorMessage('Groq', 429, lastGroqErr || 'Rate limit or model access error') });
     }
 
     // OpenRouter Provider
@@ -146,33 +176,55 @@ export default async function handler(req: any, res: any) {
       const orKey = apiKey || process.env.OPENROUTER_API_KEY;
       if (!orKey) return res.status(400).json({ error: 'OpenRouter API key not configured.' });
 
-      const selectedModel = model || 'meta-llama/llama-3.3-70b-instruct';
-      const fetchRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${orKey}`,
-          'HTTP-Referer': 'https://sweetpromptspro.com',
-          'X-Title': 'SweetPrompts Pro',
-        },
-        body: JSON.stringify({
-          model: selectedModel,
-          messages: [
-            { role: 'system', content: cleanSystem },
-            { role: 'user', content: prompt }
-          ],
-          response_format: jsonMode ? { type: 'json_object' } : undefined,
-          temperature,
-          max_tokens: maxTokens,
-        }),
-      });
+      const initialModel = model || 'google/gemini-2.0-flash-lite-001';
+      const candidateModels = Array.from(new Set([
+        initialModel,
+        'google/gemini-2.0-flash-lite-001',
+        'meta-llama/llama-3.3-70b-instruct',
+        'meta-llama/llama-3.1-8b-instruct:free',
+        'mistralai/mistral-7b-instruct:free',
+        'deepseek/deepseek-r1:free'
+      ]));
 
-      if (!fetchRes.ok) {
-        const errText = await fetchRes.text();
-        return res.status(fetchRes.status).json({ error: `OpenRouter error: ${errText}` });
+      let lastOrErr = '';
+      for (const candidate of candidateModels) {
+        try {
+          const fetchRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${orKey}`,
+              'HTTP-Referer': 'https://sweetpromptspro.com',
+              'X-Title': 'SweetPrompts Pro',
+            },
+            body: JSON.stringify({
+              model: candidate,
+              messages: [
+                { role: 'system', content: cleanSystem },
+                { role: 'user', content: prompt }
+              ],
+              response_format: jsonMode ? { type: 'json_object' } : undefined,
+              temperature,
+              max_tokens: maxTokens,
+            }),
+          });
+
+          if (!fetchRes.ok) {
+            lastOrErr = await fetchRes.text();
+            if (fetchRes.status === 404 || fetchRes.status === 429 || fetchRes.status === 403) {
+              continue;
+            }
+            return res.status(fetchRes.status).json({ error: extractCleanErrorMessage('OpenRouter', fetchRes.status, lastOrErr) });
+          }
+          const data = await fetchRes.json();
+          return res.status(200).json({ result: data.choices?.[0]?.message?.content || '', modelUsed: candidate });
+        } catch (oErr: any) {
+          lastOrErr = oErr.message || String(oErr);
+          continue;
+        }
       }
-      const data = await fetchRes.json();
-      return res.status(200).json({ result: data.choices?.[0]?.message?.content || '' });
+
+      return res.status(400).json({ error: extractCleanErrorMessage('OpenRouter', 429, lastOrErr || 'Rate limited or model unavailable') });
     }
 
     // Mistral Provider
@@ -181,45 +233,138 @@ export default async function handler(req: any, res: any) {
       if (!mistralKey) return res.status(400).json({ error: 'Mistral API key not configured.' });
 
       const initialModel = (model && model !== 'mistral-large-latest') ? model : 'mistral-small-latest';
-      const candidateModels = Array.from(new Set([initialModel, 'mistral-small-latest', 'open-mistral-7b']));
+      const candidateModels = Array.from(new Set([initialModel, 'mistral-small-latest', 'open-mistral-7b', 'open-mistral-nemo']));
 
-      let lastErrText = '';
+      let lastMistralErr = '';
       for (const candidate of candidateModels) {
-        const fetchRes = await fetch('https://api.mistral.ai/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${mistralKey}`,
-          },
-          body: JSON.stringify({
-            model: candidate,
-            messages: [
-              { role: 'system', content: cleanSystem },
-              { role: 'user', content: prompt }
-            ],
-            response_format: jsonMode ? { type: 'json_object' } : undefined,
-            temperature,
-            max_tokens: maxTokens,
-          }),
-        });
+        try {
+          const fetchRes = await fetch('https://api.mistral.ai/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${mistralKey}`,
+            },
+            body: JSON.stringify({
+              model: candidate,
+              messages: [
+                { role: 'system', content: cleanSystem },
+                { role: 'user', content: prompt }
+              ],
+              response_format: jsonMode ? { type: 'json_object' } : undefined,
+              temperature,
+              max_tokens: maxTokens,
+            }),
+          });
 
-        if (!fetchRes.ok) {
-          lastErrText = await fetchRes.text();
-          if (fetchRes.status === 403 || lastErrText.includes('subscription tier')) {
-            continue;
+          if (!fetchRes.ok) {
+            lastMistralErr = await fetchRes.text();
+            if (fetchRes.status === 403 || fetchRes.status === 429 || lastMistralErr.includes('subscription tier') || lastMistralErr.includes('rate limit')) {
+              continue; // Try next candidate
+            }
+            return res.status(fetchRes.status).json({ error: extractCleanErrorMessage('Mistral', fetchRes.status, lastMistralErr) });
           }
-          return res.status(fetchRes.status).json({ error: `Mistral error: ${lastErrText}` });
-        }
 
-        const data = await fetchRes.json();
-        return res.status(200).json({ result: data.choices?.[0]?.message?.content || '', modelUsed: candidate });
+          const data = await fetchRes.json();
+          return res.status(200).json({ result: data.choices?.[0]?.message?.content || '', modelUsed: candidate });
+        } catch (mErr: any) {
+          lastMistralErr = mErr.message || String(mErr);
+          continue;
+        }
       }
 
-      return res.status(403).json({ error: `Mistral error: ${lastErrText || 'Model not available in your subscription tier'}` });
+      return res.status(400).json({ error: extractCleanErrorMessage('Mistral', 429, lastMistralErr || 'Rate limit or free tier quota reached') });
     }
 
-    return res.status(400).json({ error: `Unknown provider: ${provider}` });
+    // Cerebras Provider
+    if (provider === 'cerebras') {
+      const cKey = apiKey || process.env.CEREBRAS_API_KEY;
+      if (!cKey) return res.status(400).json({ error: 'Cerebras API key not configured.' });
+
+      const initialModel = model || 'llama3.1-8b';
+      const candidateModels = Array.from(new Set([initialModel, 'llama3.1-8b', 'llama-3.3-70b']));
+
+      let lastCErr = '';
+      for (const candidate of candidateModels) {
+        try {
+          const fetchRes = await fetch('https://api.cerebras.ai/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${cKey}`,
+            },
+            body: JSON.stringify({
+              model: candidate,
+              messages: [
+                { role: 'system', content: cleanSystem },
+                { role: 'user', content: prompt }
+              ],
+              temperature,
+              max_tokens: maxTokens,
+            }),
+          });
+
+          if (!fetchRes.ok) {
+            lastCErr = await fetchRes.text();
+            continue;
+          }
+
+          const data = await fetchRes.json();
+          return res.status(200).json({ result: data.choices?.[0]?.message?.content || '', modelUsed: candidate });
+        } catch (cErr: any) {
+          lastCErr = cErr.message || String(cErr);
+          continue;
+        }
+      }
+
+      return res.status(400).json({ error: extractCleanErrorMessage('Cerebras', 400, lastCErr) });
+    }
+
+    // Hugging Face Provider
+    if (provider === 'huggingface') {
+      const hfKey = apiKey || process.env.HUGGINGFACE_API_KEY;
+      if (!hfKey) return res.status(400).json({ error: 'Hugging Face API key not configured.' });
+
+      const initialModel = model || 'meta-llama/Llama-3.2-3B-Instruct';
+      const candidateModels = Array.from(new Set([initialModel, 'meta-llama/Llama-3.2-3B-Instruct', 'meta-llama/Llama-3.2-1B-Instruct', 'mistralai/Mistral-7B-Instruct-v0.3']));
+
+      let lastHfErr = '';
+      for (const candidate of candidateModels) {
+        try {
+          const fetchRes = await fetch('https://api-inference.huggingface.co/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${hfKey}`,
+            },
+            body: JSON.stringify({
+              model: candidate,
+              messages: [
+                { role: 'system', content: cleanSystem },
+                { role: 'user', content: prompt }
+              ],
+              temperature,
+              max_tokens: maxTokens,
+            }),
+          });
+
+          if (!fetchRes.ok) {
+            lastHfErr = await fetchRes.text();
+            continue;
+          }
+
+          const data = await fetchRes.json();
+          return res.status(200).json({ result: data.choices?.[0]?.message?.content || '', modelUsed: candidate });
+        } catch (hErr: any) {
+          lastHfErr = hErr.message || String(hErr);
+          continue;
+        }
+      }
+
+      return res.status(400).json({ error: extractCleanErrorMessage('Hugging Face', 400, lastHfErr) });
+    }
+
+    return res.status(400).json({ error: `Unsupported AI provider: ${provider}` });
   } catch (err: any) {
-    return res.status(500).json({ error: err.message || 'Generation failed' });
+    return res.status(500).json({ error: extractCleanErrorMessage('AI Service', 500, err.message || String(err)) });
   }
 }
