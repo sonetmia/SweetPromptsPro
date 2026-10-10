@@ -10,7 +10,7 @@ export default async function handler(req: any, res: any) {
     const { provider = 'gemini', apiKey, model } = req.body || {};
 
     if (provider === 'gemini') {
-      const activeApiKey = apiKey || process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || process.env.API_KEY;
+      const activeApiKey = apiKey || process.env.GEMINI_API_KEY || process.env.API_KEY;
       if (!activeApiKey) {
         return res.status(400).json({ success: false, error: 'No Gemini API key provided' });
       }
