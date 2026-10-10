@@ -24,20 +24,19 @@ export const PROVIDER_CAPABILITIES: Record<AIProviderName, ProviderCapabilities>
   },
   groq: {
     supportsText: true,
-    supportsVision: true, // Supported via llama-3.2-11b-vision-preview
+    supportsVision: true, // Supported via meta-llama/llama-4-scout-17b-16e-instruct
     supportsStructuredJson: true,
     speedTier: 'ultra-fast',
     freeOrLowCostTier: true,
     defaultTextModel: 'llama-3.1-8b-instant',
-    defaultVisionModel: 'llama-3.2-11b-vision-preview',
+    defaultVisionModel: 'meta-llama/llama-4-scout-17b-16e-instruct',
     defaultStructuredModel: 'llama-3.1-8b-instant',
     supportedModels: [
       'llama-3.1-8b-instant',
       'llama-3.3-70b-versatile',
-      'llama3-70b-8192',
-      'mixtral-8x7b-32768',
-      'gemma2-9b-it',
-      'llama-3.2-11b-vision-preview'
+      'llama-4-scout-17b-16e-instruct',
+      'openai/gpt-oss-20b',
+      'meta-llama/llama-4-scout-17b-16e-instruct'
     ]
   },
   mistral: {
@@ -51,7 +50,6 @@ export const PROVIDER_CAPABILITIES: Record<AIProviderName, ProviderCapabilities>
     defaultStructuredModel: 'mistral-small-latest',
     supportedModels: [
       'mistral-small-latest',
-      'open-mistral-7b',
       'mistral-medium-latest',
       'mistral-large-latest',
       'codestral-latest',
