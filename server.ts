@@ -9,8 +9,53 @@ async function startServer() {
   const app = express();
   const port = process.env.PORT || 3000;
 
-  app.use(express.json({ limit: '100mb' }));
-  app.use(express.urlencoded({ limit: '100mb', extended: true }));
+  // --- Basic hardening: hide framework fingerprint ---
+  app.disable('x-powered-by');
+
+  // --- Simple in-memory rate limiter (no extra dependency) ---
+  // Protects /api/* from abuse/DoS. Not shared across processes; for a
+  // single-instance personal deployment this is enough.
+  interface RateBucket { count: number; resetAt: number }
+  const rateBuckets = new Map<string, RateBucket>();
+
+  function rateLimit({ windowMs, max, message }: { windowMs: number; max: number; message: string }) {
+    return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+      const ip = req.ip || req.socket.remoteAddress || 'unknown';
+      const key = `${req.path}:${ip}`;
+      const now = Date.now();
+      let bucket = rateBuckets.get(key);
+      if (!bucket || now > bucket.resetAt) {
+        bucket = { count: 0, resetAt: now + windowMs };
+        rateBuckets.set(key, bucket);
+      }
+      bucket.count += 1;
+      if (bucket.count > max) {
+        const retryAfter = Math.ceil((bucket.resetAt - now) / 1000);
+        res.setHeader('Retry-After', String(retryAfter));
+        return res.status(429).json({ error: message });
+      }
+      // Prevent unbounded memory growth if many distinct IPs/paths appear
+      if (rateBuckets.size > 10000) rateBuckets.clear();
+      next();
+    };
+  }
+
+  // General API throttle: 60 requests/minute per IP per endpoint
+  app.use('/api/', rateLimit({
+    windowMs: 60_000,
+    max: 60,
+    message: 'Too many requests. Please wait a moment and try again.',
+  }));
+  // Vision accepts large base64 images, so it gets a stricter quota
+  app.use('/api/vision', rateLimit({
+    windowMs: 60_000,
+    max: 20,
+    message: 'Too many image requests. Please wait a moment and try again.',
+  }));
+
+  // 25mb is plenty for base64 images; 100mb was an easy DoS vector.
+  app.use(express.json({ limit: '25mb' }));
+  app.use(express.urlencoded({ limit: '25mb', extended: true }));
 
   // Helper to extract clean error message
   const extractError = (err: any, provider: string) => {
