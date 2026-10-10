@@ -171,7 +171,7 @@ async function executeDirectClientGenerate(payload: GeneratePayload): Promise<st
   if (provider === 'groq') {
     if (!apiKey) throw new Error('Groq API Key is missing. Please enter your Groq key in Settings.');
     const initialModel = model || 'llama-3.1-8b-instant';
-    const candidateModels = Array.from(new Set([initialModel, 'llama-3.1-8b-instant', 'llama-3.3-70b-versatile', 'llama3-70b-8192', 'mixtral-8x7b-32768', 'gemma2-9b-it']));
+    const candidateModels = Array.from(new Set([initialModel, 'llama-3.1-8b-instant', 'llama-3.3-70b-versatile', 'llama-4-scout-17b-16e-instruct', 'openai/gpt-oss-20b']));
 
     let lastGroqErr = '';
     for (const candidate of candidateModels) {
@@ -274,7 +274,7 @@ async function executeDirectClientGenerate(payload: GeneratePayload): Promise<st
   if (provider === 'mistral') {
     if (!apiKey) throw new Error('Mistral API Key is missing. Please enter your Mistral key in Settings.');
     const initialModel = (model && model !== 'mistral-large-latest') ? model : 'mistral-small-latest';
-    const candidateModels = Array.from(new Set([initialModel, 'mistral-small-latest', 'open-mistral-7b', 'open-mistral-nemo']));
+    const candidateModels = Array.from(new Set([initialModel, 'mistral-small-latest', 'mistral-medium-latest', 'mistral-large-latest']));
 
     let lastMistralErrText = '';
     for (const candidate of candidateModels) {
