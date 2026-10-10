@@ -1,1 +1,4 @@
-/*    /index.html   200
+# No backend on Netlify (api/*.ts are Vercel functions) — return a clean
+# 404 for /api/* so the app falls back to direct browser-side AI calls.
+/api/*  /404.html  404!
+/*      /index.html   200
