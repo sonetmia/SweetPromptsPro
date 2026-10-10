@@ -149,7 +149,10 @@ async function startServer() {
       // Provider: Google Gemini
       if (provider === 'gemini') {
         const clientKey = typeof apiKey === 'string' ? apiKey.trim() : '';
-        const systemEnvKey = (process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || process.env.API_KEY || '').trim();
+        const systemEnvKey = (process.env.GEMINI_API_KEY || process.env.API_KEY || '').trim();
+        if (!systemEnvKey && process.env.VITE_GEMINI_API_KEY) {
+          console.warn('[security] VITE_GEMINI_API_KEY is set, but VITE_ variables are baked into the public JS bundle. Rename it to GEMINI_API_KEY (see .env.example).');
+        }
 
         // Try user provided client key first, then system environment key if different
         const keysToTry: string[] = [];
@@ -467,7 +470,10 @@ async function startServer() {
       // Gemini Vision
       if (provider === 'gemini') {
         const clientKey = typeof apiKey === 'string' ? apiKey.trim() : '';
-        const systemEnvKey = (process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || process.env.API_KEY || '').trim();
+        const systemEnvKey = (process.env.GEMINI_API_KEY || process.env.API_KEY || '').trim();
+        if (!systemEnvKey && process.env.VITE_GEMINI_API_KEY) {
+          console.warn('[security] VITE_GEMINI_API_KEY is set, but VITE_ variables are baked into the public JS bundle. Rename it to GEMINI_API_KEY (see .env.example).');
+        }
 
         // Try user provided client key first, then system environment key if different
         const keysToTry: string[] = [];
