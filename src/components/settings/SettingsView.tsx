@@ -298,6 +298,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         )}
       </div>
 
+      {/* Security notice: keys live in plain localStorage */}
+      <div className="p-4 rounded-[8px] border border-[#5a4a1f] bg-[#2a2111]/60 flex items-start gap-3">
+        <AlertCircle className="w-5 h-5 text-[#d9a93b] shrink-0 mt-0.5" />
+        <div className="text-[11px] leading-relaxed text-[#c9bfa8]">
+          <span className="font-semibold text-[#f0e6cc]">Security note: </span>
+          API keys are stored as plain text in this browser&apos;s localStorage. Anyone with access to
+          this browser profile can read them. Only save keys on devices you trust, and use
+          the Clear button to remove a key you no longer need.
+        </div>
+      </div>
+
       {/* Clean Provider List */}
       <div className="bg-[#11161A] border border-[#272D30] rounded-[8px] p-5 space-y-4">
         <div className="flex items-center justify-between pb-3 border-b border-[#1F272B]">
