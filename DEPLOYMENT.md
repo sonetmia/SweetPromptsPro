@@ -53,3 +53,7 @@ It will work seamlessly when pushed to GitHub and deployed on **Netlify**, **Ver
 1. Import the repository in [vercel.com](https://vercel.com/).
 2. Keep the default Vite settings; `vercel.json` already excludes `/api/*` from the SPA rewrite so the functions in `api/` stay reachable.
 3. Optional: set server-side API keys (e.g. `GEMINI_API_KEY`) in Vercel Project Settings to let the proxy use them. **Never use `VITE_`-prefixed names for secrets** — Vite bakes those into the public JS bundle.
+
+## Production
+- Live site: https://sweetpromptspro.netlify.app/
+- Netlify auto-deploys from `main`; a push triggers a fresh production build.
