@@ -90,7 +90,7 @@ export default async function handler(req: any, res: any) {
       if (!groqKey) return res.status(400).json({ error: 'Groq API key not configured. Please add your key in Settings.' });
 
       const initialModel = model || 'llama-3.1-8b-instant';
-      const candidateModels = Array.from(new Set([initialModel, 'llama-3.1-8b-instant', 'llama-3.3-70b-versatile', 'llama3-70b-8192', 'mixtral-8x7b-32768', 'gemma2-9b-it']));
+      const candidateModels = Array.from(new Set([initialModel, 'llama-3.1-8b-instant', 'llama-3.3-70b-versatile', 'llama-4-scout-17b-16e-instruct', 'openai/gpt-oss-20b']));
 
       let lastGroqErr: any = null;
       for (const candidate of candidateModels) {
@@ -195,7 +195,7 @@ export default async function handler(req: any, res: any) {
       if (!mistralKey) return res.status(400).json({ error: 'Mistral API key not configured.' });
 
       const initialModel = (model && model !== 'mistral-large-latest') ? model : 'mistral-small-latest';
-      const candidateModels = Array.from(new Set([initialModel, 'mistral-small-latest', 'open-mistral-7b', 'open-mistral-nemo']));
+      const candidateModels = Array.from(new Set([initialModel, 'mistral-small-latest', 'mistral-medium-latest', 'mistral-large-latest']));
 
       let lastMistralErr = '';
       for (const candidate of candidateModels) {
