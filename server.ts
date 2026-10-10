@@ -180,7 +180,7 @@ async function startServer() {
         }
 
         const initialModel = model || 'llama-3.1-8b-instant';
-        const candidateModels = Array.from(new Set([initialModel, 'llama-3.1-8b-instant', 'llama-3.3-70b-versatile', 'llama3-70b-8192', 'mixtral-8x7b-32768', 'gemma2-9b-it']));
+        const candidateModels = Array.from(new Set([initialModel, 'llama-3.1-8b-instant', 'llama-3.3-70b-versatile', 'llama-4-scout-17b-16e-instruct', 'openai/gpt-oss-20b']));
 
         let lastGroqErr: any = null;
         for (const candidate of candidateModels) {
@@ -237,7 +237,7 @@ async function startServer() {
         }
 
         const initialModel = (model && model !== 'mistral-large-latest') ? model : 'mistral-small-latest';
-        const candidateModels = Array.from(new Set([initialModel, 'mistral-small-latest', 'open-mistral-7b']));
+        const candidateModels = Array.from(new Set([initialModel, 'mistral-small-latest', 'mistral-medium-latest', 'mistral-large-latest']));
 
         let lastMistralErr: any = null;
         for (const candidate of candidateModels) {
@@ -493,12 +493,12 @@ async function startServer() {
         return res.status(500).json({ error: 'Failed to generate vision analysis with Gemini.' });
       }
 
-      // Groq Vision (llama-3.2-11b-vision-preview)
+      // Groq Vision (llama-4-scout supports vision)
       if (provider === 'groq') {
         const groqKey = apiKey || process.env.GROQ_API_KEY;
         if (!groqKey) return res.status(400).json({ error: 'Groq API key not configured.' });
 
-        const selectedModel = model || 'llama-3.2-11b-vision-preview';
+        const selectedModel = model || 'meta-llama/llama-4-scout-17b-16e-instruct';
         const imageUrl = `data:${mimeType};base64,${imageBase64}`;
 
         const fetchRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
