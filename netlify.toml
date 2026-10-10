@@ -2,6 +2,17 @@
   command = "npm run build"
   publish = "dist"
 
+# IMPORTANT: There is no backend on Netlify — api/*.ts are Vercel-style
+# serverless functions and Netlify will not run them. This rule keeps
+# /api/* out of the SPA rewrite below so API calls get a clean 404
+# instead of index.html. The app's proxyClient detects the missing
+# backend and falls back to 100% direct browser-side AI execution.
+[[redirects]]
+  from = "/api/*"
+  to = "/404.html"
+  status = 404
+  force = true
+
 [[redirects]]
   from = "/*"
   to = "/index.html"
