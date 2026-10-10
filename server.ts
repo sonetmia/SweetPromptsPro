@@ -2,6 +2,7 @@ import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
 import { GoogleGenAI } from '@google/genai';
+import { GEMINI_TEXT_FALLBACKS, GEMINI_VISION_FALLBACKS, cleanProviderError } from './api/_shared';
 
 dotenv.config();
 
@@ -57,45 +58,6 @@ async function startServer() {
   app.use(express.json({ limit: '25mb' }));
   app.use(express.urlencoded({ limit: '25mb', extended: true }));
 
-  // Helper to extract clean error message
-  const extractError = (err: any, provider: string) => {
-    if (!err) return `${provider} request failed`;
-    if (typeof err === 'string') return parseCleanError(err, provider);
-    if (err.message) return parseCleanError(err.message, provider);
-    return `${provider} request failed`;
-  };
-
-  const parseCleanError = (raw: string, provider: string): string => {
-    if (!raw) return `${provider} request failed`;
-    
-    // Check for API key invalid errors
-    if (raw.includes('API key not valid') || raw.includes('API_KEY_INVALID') || raw.includes('INVALID_ARGUMENT')) {
-      return `${provider}: Invalid API Key. Please enter a valid API key in Settings or switch AI providers.`;
-    }
-
-    // Check for rate limits / quota
-    if (raw.includes('429') || raw.includes('Quota exceeded') || raw.includes('RESOURCE_EXHAUSTED')) {
-      return `${provider}: API quota or rate limit reached. Please wait a moment, or switch to Groq / Mistral / OpenRouter in Settings.`;
-    }
-
-    try {
-      const match = raw.match(/\{[\s\S]*\}/);
-      if (match) {
-        const parsed = JSON.parse(match[0]);
-        if (parsed.error?.code === 429 || parsed.error?.status === 'RESOURCE_EXHAUSTED') {
-          return `${provider}: API quota or rate limit reached. Please wait a moment, or switch to Groq / Mistral / OpenRouter in Settings.`;
-        }
-        if (parsed.error?.reason === 'API_KEY_INVALID' || parsed.error?.message?.includes('API key not valid')) {
-          return `${provider}: Invalid API Key. Please enter a valid API key in Settings or switch AI providers.`;
-        }
-        const msg = parsed.error?.message || parsed.error || parsed.message;
-        if (msg) return `${provider}: ${typeof msg === 'string' ? msg : JSON.stringify(msg)}`;
-      }
-    } catch {}
-
-    return `${provider}: ${raw}`;
-  };
-
   // Helper to parse OpenAI-compatible chat response
   const handleOpenAIChatResponse = async (fetchRes: Response, providerName: string) => {
     if (!fetchRes.ok) {
@@ -110,21 +72,6 @@ async function startServer() {
     const data = await fetchRes.json();
     return data.choices?.[0]?.message?.content || '';
   };
-
-  const GEMINI_TEXT_FALLBACKS = [
-    'gemini-2.5-flash',
-    'gemini-3.8-flash',
-    'gemini-3.1-flash-lite',
-    'gemini-flash-latest',
-    'gemini-2.5-flash-lite',
-  ];
-
-  const GEMINI_VISION_FALLBACKS = [
-    'gemini-2.5-flash',
-    'gemini-3.8-flash',
-    'gemini-3.1-flash-lite',
-    'gemini-flash-latest',
-  ];
 
   // API Route: Text Generation
   app.post('/api/generate', async (req, res) => {
@@ -454,7 +401,7 @@ async function startServer() {
       return res.status(400).json({ error: `Unknown provider: ${provider}` });
     } catch (error: any) {
       console.error('API /generate Error:', error);
-      res.status(500).json({ error: extractError(error, req.body.provider || 'AI Provider') });
+      res.status(500).json({ error: cleanProviderError(req.body.provider || 'AI Provider', error) });
     }
   });
 
@@ -651,7 +598,7 @@ async function startServer() {
       });
     } catch (error: any) {
       console.error('Vision API Error:', error);
-      res.status(500).json({ error: extractError(error, req.body.provider || 'Vision Provider') });
+      res.status(500).json({ error: cleanProviderError(req.body.provider || 'Vision Provider', error) });
     }
   });
 
@@ -738,7 +685,7 @@ async function startServer() {
         const latencyMs = Date.now() - startTime;
         if (!fetchRes.ok) {
           const err = await fetchRes.text();
-          return res.status(fetchRes.status).json({ success: false, error: parseCleanError(err, 'Groq') });
+          return res.status(fetchRes.status).json({ success: false, error: cleanProviderError('Groq', err, fetchRes.status) });
         }
         return res.json({ 
           success: true, 
@@ -765,7 +712,7 @@ async function startServer() {
         const latencyMs = Date.now() - startTime;
         if (!fetchRes.ok) {
           const err = await fetchRes.text();
-          return res.status(fetchRes.status).json({ success: false, error: parseCleanError(err, 'Mistral') });
+          return res.status(fetchRes.status).json({ success: false, error: cleanProviderError('Mistral', err, fetchRes.status) });
         }
         return res.json({ 
           success: true, 
@@ -792,7 +739,7 @@ async function startServer() {
         const latencyMs = Date.now() - startTime;
         if (!fetchRes.ok) {
           const err = await fetchRes.text();
-          return res.status(fetchRes.status).json({ success: false, error: parseCleanError(err, 'OpenRouter') });
+          return res.status(fetchRes.status).json({ success: false, error: cleanProviderError('OpenRouter', err, fetchRes.status) });
         }
         return res.json({ 
           success: true, 
@@ -845,7 +792,7 @@ async function startServer() {
 
         return res.status(400).json({ 
           success: false, 
-          error: parseCleanError(lastHfErr || 'Hugging Face endpoint unreachable', 'Hugging Face') 
+          error: cleanProviderError('Hugging Face', lastHfErr || 'Hugging Face endpoint unreachable', 400) 
         });
       }
 
@@ -864,7 +811,7 @@ async function startServer() {
         const latencyMs = Date.now() - startTime;
         if (!fetchRes.ok) {
           const err = await fetchRes.text();
-          return res.status(fetchRes.status).json({ success: false, error: parseCleanError(err, 'Cerebras') });
+          return res.status(fetchRes.status).json({ success: false, error: cleanProviderError('Cerebras', err, fetchRes.status) });
         }
         return res.json({ 
           success: true, 
