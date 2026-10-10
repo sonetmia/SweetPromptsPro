@@ -1,6 +1,6 @@
 {
   "name": "SweetPrompts Pro",
-  "description": "AI-Powered Prompt & Microstock Workflow Studio",
+  "description": "AI-Powered Prompt & Microstock Workflow Studio — server API proxy on Vercel/local, 100% direct browser execution on Netlify & GitHub Pages",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
