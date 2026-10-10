@@ -1,46 +1,5 @@
 import { GoogleGenAI } from '@google/genai';
-
-const GEMINI_TEXT_FALLBACKS = [
-  'gemini-2.5-flash',
-  'gemini-2.0-flash',
-  'gemini-1.5-flash',
-  'gemini-1.5-pro'
-];
-
-function extractCleanErrorMessage(providerName: string, status: number, rawErrText: string): string {
-  let cleanMsg = '';
-  try {
-    const parsed = JSON.parse(rawErrText);
-    cleanMsg = parsed?.message || parsed?.error?.message || parsed?.error || parsed?.detail || rawErrText;
-  } catch {
-    cleanMsg = rawErrText;
-  }
-
-  if (typeof cleanMsg === 'object') {
-    try {
-      cleanMsg = (cleanMsg as any).message || JSON.stringify(cleanMsg);
-    } catch {
-      cleanMsg = String(cleanMsg);
-    }
-  }
-
-  const lower = String(cleanMsg).toLowerCase();
-
-  if (status === 429 || lower.includes('rate limit') || lower.includes('quota') || lower.includes('too many requests')) {
-    return `${providerName}: Rate limit or API quota reached. Please wait a moment, or switch to Gemini / Groq / OpenRouter in Settings.`;
-  }
-
-  if (status === 401 || lower.includes('unauthorized') || lower.includes('invalid api key') || lower.includes('invalid_api_key')) {
-    return `${providerName}: Invalid API key. Please verify your key in Settings.`;
-  }
-
-  if (status === 403 || lower.includes('subscription tier') || lower.includes('access')) {
-    return `${providerName}: Model not supported on your free key tier. Retrying backup model...`;
-  }
-
-  const shortMsg = String(cleanMsg).replace(/[{}"\\]/g, ' ').replace(/\s+/g, ' ').trim();
-  return `${providerName} (${status || 'Error'}): ${shortMsg.slice(0, 120)}`;
-}
+import { GEMINI_TEXT_FALLBACKS, cleanProviderError } from './_shared';
 
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') {
@@ -120,7 +79,7 @@ export default async function handler(req: any, res: any) {
       }
 
       if (lastError) {
-        return res.status(400).json({ error: extractCleanErrorMessage('Google Gemini', 400, lastError.message || String(lastError)) });
+        return res.status(400).json({ error: cleanProviderError('Google Gemini', lastError.message || String(lastError), 400) });
       }
       return res.status(500).json({ error: 'Failed to generate content with Gemini.' });
     }
@@ -157,10 +116,10 @@ export default async function handler(req: any, res: any) {
           if (!fetchRes.ok) {
             const errText = await fetchRes.text();
             if (fetchRes.status === 404 || fetchRes.status === 429 || fetchRes.status === 403 || errText.includes('does not exist') || errText.includes('model_not_found') || errText.includes('access')) {
-              lastGroqErr = extractCleanErrorMessage('Groq', fetchRes.status, errText);
+              lastGroqErr = cleanProviderError('Groq', errText, fetchRes.status);
               continue;
             }
-            return res.status(fetchRes.status).json({ error: extractCleanErrorMessage('Groq', fetchRes.status, errText) });
+            return res.status(fetchRes.status).json({ error: cleanProviderError('Groq', errText, fetchRes.status) });
           }
 
           const data = await fetchRes.json();
@@ -171,7 +130,7 @@ export default async function handler(req: any, res: any) {
         }
       }
 
-      return res.status(400).json({ error: extractCleanErrorMessage('Groq', 429, lastGroqErr || 'Rate limit or model access error') });
+      return res.status(400).json({ error: cleanProviderError('Groq', lastGroqErr || 'Rate limit or model access error', 429) });
     }
 
     // OpenRouter Provider
@@ -217,7 +176,7 @@ export default async function handler(req: any, res: any) {
             if (fetchRes.status === 404 || fetchRes.status === 429 || fetchRes.status === 403) {
               continue;
             }
-            return res.status(fetchRes.status).json({ error: extractCleanErrorMessage('OpenRouter', fetchRes.status, lastOrErr) });
+            return res.status(fetchRes.status).json({ error: cleanProviderError('OpenRouter', lastOrErr, fetchRes.status) });
           }
           const data = await fetchRes.json();
           return res.status(200).json({ result: data.choices?.[0]?.message?.content || '', modelUsed: candidate });
@@ -227,7 +186,7 @@ export default async function handler(req: any, res: any) {
         }
       }
 
-      return res.status(400).json({ error: extractCleanErrorMessage('OpenRouter', 429, lastOrErr || 'Rate limited or model unavailable') });
+      return res.status(400).json({ error: cleanProviderError('OpenRouter', lastOrErr || 'Rate limited or model unavailable', 429) });
     }
 
     // Mistral Provider
@@ -264,7 +223,7 @@ export default async function handler(req: any, res: any) {
             if (fetchRes.status === 403 || fetchRes.status === 429 || lastMistralErr.includes('subscription tier') || lastMistralErr.includes('rate limit')) {
               continue; // Try next candidate
             }
-            return res.status(fetchRes.status).json({ error: extractCleanErrorMessage('Mistral', fetchRes.status, lastMistralErr) });
+            return res.status(fetchRes.status).json({ error: cleanProviderError('Mistral', lastMistralErr, fetchRes.status) });
           }
 
           const data = await fetchRes.json();
@@ -275,7 +234,7 @@ export default async function handler(req: any, res: any) {
         }
       }
 
-      return res.status(400).json({ error: extractCleanErrorMessage('Mistral', 429, lastMistralErr || 'Rate limit or free tier quota reached') });
+      return res.status(400).json({ error: cleanProviderError('Mistral', lastMistralErr || 'Rate limit or free tier quota reached', 429) });
     }
 
     // Cerebras Provider
@@ -319,7 +278,7 @@ export default async function handler(req: any, res: any) {
         }
       }
 
-      return res.status(400).json({ error: extractCleanErrorMessage('Cerebras', 400, lastCErr) });
+      return res.status(400).json({ error: cleanProviderError('Cerebras', lastCErr, 400) });
     }
 
     // Hugging Face Provider
@@ -363,11 +322,11 @@ export default async function handler(req: any, res: any) {
         }
       }
 
-      return res.status(400).json({ error: extractCleanErrorMessage('Hugging Face', 400, lastHfErr) });
+      return res.status(400).json({ error: cleanProviderError('Hugging Face', lastHfErr, 400) });
     }
 
     return res.status(400).json({ error: `Unsupported AI provider: ${provider}` });
   } catch (err: any) {
-    return res.status(500).json({ error: extractCleanErrorMessage('AI Service', 500, err.message || String(err)) });
+    return res.status(500).json({ error: cleanProviderError('AI Service', err.message || String(err), 500) });
   }
 }
