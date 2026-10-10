@@ -1,11 +1,7 @@
 import { GoogleGenAI } from '@google/genai';
+import { GEMINI_VISION_FALLBACKS } from './_shared';
 
-const GEMINI_VISION_FALLBACKS = [
-  'gemini-2.5-flash',
-  'gemini-2.0-flash',
-  'gemini-1.5-flash',
-  'gemini-1.5-pro'
-];
+
 
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') {
